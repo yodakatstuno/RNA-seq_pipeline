@@ -44,16 +44,20 @@ pipeline_root_dir <- local({
   }
 })
 
-pipeline_output_root <- normalizePath(
-  file.path(pipeline_root_dir, "output", "result"),
-  mustWork = FALSE
-)
+pipeline_output_root <- local({
+  configured_root <- Sys.getenv("PIPELINE_OUTPUT_DIR", unset = "")
+  if (nzchar(configured_root)) {
+    normalizePath(configured_root, mustWork = FALSE)
+  } else {
+    normalizePath(path.expand("~/Output"), mustWork = FALSE)
+  }
+})
 
 #' コマンドライン引数をパースする基本オプションリスト
 base_option_list <- list(
   make_option("--counts",   type = "character", help = "Count matrix RDS path"),
   make_option("--metadata", type = "character", help = "Metadata xlsx/csv path"),
-  make_option("--outdir",   type = "character", default = "", help = "Output directory (retained for compatibility; results are written under output/result)"),
+  make_option("--outdir",   type = "character", default = "", help = "Output directory (retained for compatibility; results are written under ~/Output or PIPELINE_OUTPUT_DIR)"),
   make_option("--label_mode", type = "character", default = "sampleID_only",
               help = "Sample label display: sampleID_only | symbol_only | both"),
   make_option("--symbol_col", type = "character", default = "",
@@ -75,15 +79,19 @@ normalize_label_mode <- function(x) {
 }
 
 ensure_pipeline_output_root <- function(requested_outdir = "") {
-  dir.create(pipeline_output_root, recursive = TRUE, showWarnings = FALSE)
   requested_outdir <- trimws(as.character(requested_outdir))
-  if (!identical(requested_outdir, "") &&
-      normalizePath(requested_outdir, mustWork = FALSE) != pipeline_output_root) {
-    message("[INFO] --outdir='", requested_outdir,
-            "' は互換性のため受け付けますが、出力先は固定で ",
-            pipeline_output_root, " を使用します。")
+  effective_root <- pipeline_output_root
+  if (!identical(requested_outdir, "")) {
+    effective_root <- normalizePath(requested_outdir, mustWork = FALSE)
   }
-  pipeline_output_root
+  dir.create(effective_root, recursive = TRUE, showWarnings = FALSE)
+  if (!identical(requested_outdir, "") &&
+      !identical(effective_root, pipeline_output_root)) {
+    message("[INFO] --outdir='", requested_outdir,
+            "' を使用します (PIPELINE_OUTPUT_DIR または ~/Output を上書き)。")
+  }
+  assign("pipeline_output_root", effective_root, envir = parent.env(environment()))
+  effective_root
 }
 
 resolve_step_outdir <- function(step_dir, requested_outdir = "", analysis_name = NULL) {

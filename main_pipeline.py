@@ -27,7 +27,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 R_DIR = BASE_DIR / "R"
 CONFIG_FILE = BASE_DIR / "config.yaml"
-RESULT_ROOT = BASE_DIR / "output" / "result"
+DEFAULT_OUTPUT_ROOT = Path.home() / "Output"
 
 LOG = logging.getLogger("pipeline")
 
@@ -195,6 +195,24 @@ def write_environment_report(outdir, openmp_available, openmp_error):
             f.write("- Use non-OpenMP builds\n")
 
 
+def write_run_metadata(outdir, args, cfg, organism_args, params, run_selection):
+    meta = {
+        "timestamp": datetime.now().isoformat(),
+        "run_dir": str(Path(outdir).resolve()),
+        "output_root": str(get_output_root()),
+        "counts": cfg.get("counts_path"),
+        "metadata": cfg.get("metadata_path"),
+        "organism": organism_args.get("organism"),
+        "kegg_org": organism_args.get("kegg_org"),
+        "analysis_name": params.get("analysis_name"),
+        "run_selection": run_selection,
+        "cli": sys.argv,
+    }
+    path = Path(outdir) / "run_metadata.yaml"
+    with path.open("w", encoding="utf-8") as f:
+        yaml.safe_dump(meta, f, allow_unicode=True, default_flow_style=False)
+
+
 def filter_openmp_steps(run_list):
     if OPENMP_AVAILABLE:
         return run_list
@@ -208,6 +226,25 @@ def filter_openmp_steps(run_list):
 RSCRIPT = None
 R_DEPS_INSTALLED = False
 R_LIBS_USER = BASE_DIR / ".r_libs"
+
+
+def get_output_root():
+    configured = os.environ.get("PIPELINE_OUTPUT_DIR", "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return DEFAULT_OUTPUT_ROOT.resolve()
+
+
+def create_run_dir(base_root: Path) -> Path:
+    base_root.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("run_%Y-%m-%d_%H-%M-%S")
+    candidate = base_root / ts
+    suffix = 1
+    while candidate.exists():
+        candidate = base_root / f"{ts}_{suffix}"
+        suffix += 1
+    candidate.mkdir(parents=True, exist_ok=False)
+    return candidate
 
 
 def init_rscript():
@@ -312,6 +349,10 @@ def run_r_script(script_name, args_dict, dry_run=False, precheck=True):
 
     env = os.environ.copy()
     env["R_LIBS_USER"] = str(R_LIBS_USER)
+    if "outdir" in args_dict and args_dict["outdir"]:
+        env["PIPELINE_OUTPUT_DIR"] = str(args_dict["outdir"])
+    else:
+        env["PIPELINE_OUTPUT_DIR"] = str(get_output_root())
     result = subprocess.run(cmd, cwd=str(BASE_DIR), capture_output=True, text=True, env=env)
     if result.stdout:
         for line in result.stdout.strip().splitlines():
@@ -418,13 +459,10 @@ def get_param(cfg, args, key, default):
 
 
 def resolve_outdir(base_outdir):
-    if base_outdir:
-        requested = Path(base_outdir).resolve()
-    else:
-        requested = RESULT_ROOT
-    outdir = RESULT_ROOT
-    outdir.mkdir(parents=True, exist_ok=True)
-    return outdir, requested
+    result_root = get_output_root()
+    requested = Path(base_outdir).resolve() if base_outdir else result_root
+    run_dir = create_run_dir(result_root)
+    return run_dir, requested
 
 
 def get_step_output_dir(base_outdir, step_dir, analysis_name=None):
@@ -957,7 +995,7 @@ def main():
     parser.add_argument("--non-interactive", action="store_true",
                         help="Disable prompts and require CLI values")
     parser.add_argument("--run", type=str, help="Run step: all, 1, 6, or 7")
-    parser.add_argument("--outdir", type=str, help="Output directory (retained for compatibility; results are written to output/result)")
+    parser.add_argument("--outdir", type=str, help="Output directory (retained for compatibility; results are written to ~/Output or PIPELINE_OUTPUT_DIR)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Validate and print commands without executing")
     parser.add_argument("--describe", action="store_true",
@@ -1043,7 +1081,7 @@ def main():
         if not args.run:
             args.run = "1"  # default: run DE only for quick demo
         if not args.outdir:
-            args.outdir = str(RESULT_ROOT)
+            args.outdir = str(get_output_root())
         LOG.info("Example counts: %s", args.counts)
         LOG.info("Example metadata: %s", args.metadata)
         LOG.info("Example output: %s", args.outdir)
@@ -1128,6 +1166,7 @@ def main():
         params["label_mode"] = "sampleID_only"
 
     get_organism_args(cfg, args, interactive=not args.non_interactive, config_path=args.config)
+    run_selection = args.run if args.run else ("interactive" if not args.non_interactive else "none")
 
     if args.non_interactive:
         if args.run:
@@ -1155,6 +1194,8 @@ def main():
                 15: run_15_sc,
             }
 
+            write_run_metadata(outdir, args, cfg, ORG_ARGS, params, run_list)
+
             for n in run_list:
                 LOG.info("Non-interactive run: step %s", n)
                 ok = dispatch[n](common, params, non_interactive=True, dry_run=args.dry_run)
@@ -1163,8 +1204,11 @@ def main():
                     sys.exit(1)
             return
         else:
+            write_run_metadata(outdir, args, cfg, ORG_ARGS, params, run_selection)
             LOG.info("Non-interactive mode: configuration resolved. Exiting without prompts.")
             return
+    else:
+        write_run_metadata(outdir, args, cfg, ORG_ARGS, params, run_selection)
 
     dispatch = {
         "1": run_01_de, "2": run_02_clustering, "3": run_03_dimreduc,

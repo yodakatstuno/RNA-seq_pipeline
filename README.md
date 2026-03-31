@@ -185,7 +185,7 @@ docker compose run pipeline \
   --non-interactive
 ```
 
-ホスト側では `./data/` に入力ファイルを置き、結果はリポジトリ内の `./output/result/` に出力されます。
+ホスト側では `./data/` に入力ファイルを置き、結果はホストの `~/Output/` に永続化されます。各実行は `run_YYYY-MM-DD_HH-MM-SS` 形式のディレクトリに分離され、過去の結果を上書きしません。
 
 ### 検証済みサンプル実行
 
@@ -236,7 +236,7 @@ docker run --rm rnaseq-pipeline:v1.0.0 \
 | `--organism <name>` | `human`、`mouse`、`zebrafish` | なし |
 | `--config <path>` | 設定 YAML ファイル | `config.yaml` |
 | `--run <step>` | `all`、`1`–`15`、`de`、`enrichment`、`gsea` | なし |
-| `--outdir <path>` | 互換性維持のため受理。実際の出力先は常に `output/result` | `output/result` |
+| `--outdir <path>` | 互換性維持のため受理。実際の出力先は常に `~/Output` または `PIPELINE_OUTPUT_DIR` 配下の `run_YYYY-MM-DD_HH-MM-SS/` | `~/Output` |
 | `--non-interactive` | 対話なしで実行 | off |
 | `--dry-run` | コマンドのみ表示 | off |
 | `--example` | 内蔵 example データで実行 | off |
@@ -363,10 +363,17 @@ output/
 ```yaml
 volumes:
   - ./data:/data
-  - ./output:/output
+  - ${HOME}/Output:/app/Output
+user: "${UID:-0}:${GID:-0}"
 ```
 
-解析結果はコンテナ内外ともに `output/result/` 配下へ集約されます。
+解析結果はコンテナ内外ともに `~/Output/` に集約され、各実行は `run_YYYY-MM-DD_HH-MM-SS/` 配下に保存されます。`docker-compose.yml` では `${HOME}/Output:/app/Output` をマウントし、コンテナ側は `PIPELINE_OUTPUT_DIR=/app/Output` を使います。ホストと同じ UID/GID で書き込みたい場合は以下を実行してから `docker compose run` してください。
+
+```bash
+export UID=$(id -u)
+export GID=$(id -g)
+docker compose run pipeline ...
+```
 
 ### 変更後に再ビルドする
 
@@ -397,7 +404,23 @@ cp config/config_template.yaml config.yaml
 
 その後、`config.yaml` に入力ファイルパスや解析条件を記述します。利用可能な項目は `config/config_template.yaml` を参照してください。
 
-`outdir` は互換性維持のため設定ファイルに残っていますが、実際の出力先は常にリポジトリ直下の `output/result` です。
+`outdir` は互換性維持のため設定ファイルに残っていますが、実際の出力先は常に `~/Output` 直下の `run_YYYY-MM-DD_HH-MM-SS/` です。Docker では `/app/Output` にマウントされた同じホストディレクトリへ書き込みます。
+
+### 出力ディレクトリ構成
+
+```
+~/Output/
+  run_2026-03-31_13-00-00/
+    pipeline.log
+    run_metadata.yaml
+    environment_report.txt
+    01_DE/
+      results/de_results.csv
+      plots/...
+    ...
+```
+
+`PIPELINE_OUTPUT_DIR` を指定すると、その配下に同様の `run_*` フォルダが作成されます。
 
 ---
 

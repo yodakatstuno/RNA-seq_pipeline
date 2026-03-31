@@ -112,13 +112,48 @@ quarantine_package <- function(pkg, reason) {
   dir.create(quarantine_root, recursive = TRUE, showWarnings = FALSE)
   stamp <- format(Sys.time(), "%Y%m%d%H%M%S")
   target <- file.path(quarantine_root, paste0(pkg, "-", stamp))
-  ok <- file.rename(pkg_dir, target)
-  if (ok) {
+  rename_ok <- suppressWarnings(file.rename(pkg_dir, target))
+  if (isTRUE(rename_ok)) {
     message("[WARN] Quarantined incompatible package from user library: ", pkg)
     message("[WARN]   Reason: ", reason)
     message("[WARN]   Moved to: ", target)
     return(invisible(TRUE))
   }
+
+  # Docker OverlayFS and bind mounts can make file.rename() fail with EXDEV.
+  copy_ok <- suppressWarnings(file.copy(pkg_dir, target, recursive = TRUE, copy.mode = TRUE, copy.date = TRUE))
+  if (isTRUE(copy_ok) && dir.exists(target)) {
+    delete_ok <- suppressWarnings(unlink(pkg_dir, recursive = TRUE, force = TRUE))
+    if (identical(delete_ok, 0L) && !dir.exists(pkg_dir)) {
+      message("[WARN] Quarantined incompatible package from user library: ", pkg)
+      message("[WARN]   Reason: ", reason)
+      message("[WARN]   file.rename() failed; used copy-and-delete fallback.")
+      message("[WARN]   Copied to: ", target)
+      return(invisible(TRUE))
+    }
+
+    message("[WARN] Package copy succeeded but source cleanup was incomplete: ", pkg)
+    message("[WARN]   Attempting direct removal of the original package directory.")
+    cleanup_ok <- suppressWarnings(unlink(pkg_dir, recursive = TRUE, force = TRUE))
+    if (identical(cleanup_ok, 0L) && !dir.exists(pkg_dir)) {
+      message("[WARN] Quarantined incompatible package from user library: ", pkg)
+      message("[WARN]   Reason: ", reason)
+      message("[WARN]   Original package removed after copy fallback.")
+      message("[WARN]   Copied to: ", target)
+      return(invisible(TRUE))
+    }
+  }
+
+  unlink(target, recursive = TRUE, force = TRUE)
+
+  final_cleanup <- suppressWarnings(unlink(pkg_dir, recursive = TRUE, force = TRUE))
+  if (identical(final_cleanup, 0L) && !dir.exists(pkg_dir)) {
+    message("[WARN] Quarantined incompatible package from user library: ", pkg)
+    message("[WARN]   Reason: ", reason)
+    message("[WARN]   Quarantine move failed; removed package directly to stop shadowing.")
+    return(invisible(TRUE))
+  }
+
   message("[WARN] Failed to quarantine package: ", pkg)
   invisible(FALSE)
 }

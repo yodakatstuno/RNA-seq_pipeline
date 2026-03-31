@@ -15,7 +15,7 @@ metadata_path: ''        # Path to metadata (.xlsx/.csv), e.g., /data/meta.xlsx
 organism: 'org.Hs.eg.db'
 
 # --- Output ---
-outdir: ''               # Retained for compatibility; results are always written to ./output/result
+outdir: ''               # Retained for compatibility; results are always written to ~/Output or PIPELINE_OUTPUT_DIR/run_YYYY-MM-DD_HH-MM-SS
 
 # --- Differential Expression (Step 1) ---
 analysis_name: '01_DE'   # Output subfolder name

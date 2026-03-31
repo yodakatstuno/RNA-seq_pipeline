@@ -7,8 +7,10 @@ services:
     working_dir: /app
     environment:
       R_LIBS_USER: /app/.r_libs
+      PIPELINE_OUTPUT_DIR: /app/Output
+    user: "${UID:-0}:${GID:-0}"
     volumes:
       - ./:/app
       - ./data:/data
-      - ./output:/output
+      - ${HOME}/Output:/app/Output
     command: ["--help"]
