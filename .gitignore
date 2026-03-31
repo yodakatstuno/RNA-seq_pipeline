@@ -40,3 +40,7 @@ data/
 
 # Docker
 .docker/
+
+# Documents (internal use only)
+DISTRIBUTION_GUIDE.md
+PIPELINE_STATUS_HANDOVER.md
