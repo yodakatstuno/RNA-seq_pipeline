@@ -1,0 +1,54 @@
+# ============================================================
+# RNA-seq Pipeline Configuration Template
+# ============================================================
+# Copy this file to the project root as config.yaml:
+#   cp config/config_template.yaml config.yaml
+# Then edit with your actual file paths.
+# ============================================================
+
+# --- Input files ---
+counts_path: ''          # Path to count matrix (.rds), e.g., /data/counts.rds
+metadata_path: ''        # Path to metadata (.xlsx/.csv), e.g., /data/meta.xlsx
+
+# --- Organism ---
+# Options: org.Hs.eg.db (human), org.Mm.eg.db (mouse), org.Dr.eg.db (zebrafish)
+organism: 'org.Hs.eg.db'
+
+# --- Output ---
+outdir: ''               # Retained for compatibility; results are always written to ./output/result
+
+# --- Differential Expression (Step 1) ---
+analysis_name: '01_DE'   # Output subfolder name
+design_mode: 'simple'    # simple | additive | interaction
+factors: ''              # Comma-separated factor columns (empty = condition_col only)
+contrast_mode: 'pairwise'  # pairwise | auto | manual
+contrast: ''             # Manual contrast name (only for contrast_mode=manual)
+fdr_cutoff: 0.05         # FDR threshold for significance
+lfc_cutoff: 1.0          # log2 fold-change threshold
+de_test: 'Wald'          # Wald | LRT
+reduced_design: ''       # Reduced design formula for LRT, e.g. "~ dpf"
+subset_col: ''           # Metadata column used to subset samples before DE
+subset_val: ''           # Comma-separated values kept from subset_col
+explain_results: false   # Generate interpretation report
+
+# --- Sample Clustering (Step 2) ---
+target_genes: ''         # CSV path with a required 'gene' column for targeted clustering
+trend_x_col: ''          # Metadata column used on the cluster trend-plot x-axis
+
+# --- Plot Labels (Steps 2/3/4/8/11) ---
+label_mode: 'sampleID_only'  # sampleID_only | symbol_only | both
+symbol_col: ''               # Required when label_mode is symbol_only or both
+
+# --- Functional Enrichment (Step 6) ---
+enrich_pval_cutoff: 0.05
+id_type: 'auto'          # Gene ID type: auto | ENSEMBL | SYMBOL | ENTREZID
+
+# --- GSEA (Step 7) ---
+gsea_geneset: 'all'      # GO | KEGG | Reactome | all
+gsea_ranking_metric: 'log2FoldChange'  # log2FoldChange | stat | custom
+gsea_min_gs: 15         # Minimum gene set size
+gsea_max_gs: 500        # Maximum gene set size
+
+# --- Network Analysis (Step 14) ---
+detect_modules: false    # true | false; enable WGCNA module detection
+trait_cols: ''           # Comma-separated metadata columns for module-trait correlation

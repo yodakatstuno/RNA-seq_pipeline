@@ -1,0 +1,7 @@
+.git
+.DS_Store
+__pycache__
+.pytest_cache
+.r_libs
+results
+output

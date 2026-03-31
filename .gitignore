@@ -1,0 +1,42 @@
+# ============================================================
+# RNA-seq Pipeline .gitignore
+# ============================================================
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE / editor
+.vscode/
+.idea/
+*.code-workspace
+*.swp
+*.swo
+
+# R
+.r_libs/
+.Rhistory
+.RData
+.Rproj.user/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Pipeline outputs
+output/
+results*/
+*.log
+
+# User-specific config (use config/config_template.yaml)
+config.yaml
+
+# Data files (too large for git)
+*.rds
+*.RDS
+data/
+
+# Docker
+.docker/

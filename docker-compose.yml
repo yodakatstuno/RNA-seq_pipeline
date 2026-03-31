@@ -1,0 +1,14 @@
+services:
+  pipeline:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: rnaseq-pipeline:r4.4.0
+    working_dir: /app
+    environment:
+      R_LIBS_USER: /app/.r_libs
+    volumes:
+      - ./:/app
+      - ./data:/data
+      - ./output:/output
+    command: ["--help"]
