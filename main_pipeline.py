@@ -647,23 +647,45 @@ def run_01_de(common, params, non_interactive=False, dry_run=False):
 
 def run_02_clustering(common, params, non_interactive=False, dry_run=False):
     LOG.info("--- 2. サンプルクラスタリング ---")
+
+    # Analysis mode selection
+    analysis_mode = value_choice(
+        "  解析モード [sample/gene_module/trajectory]: ",
+        ["sample", "gene_module", "trajectory"],
+        params["analysis_mode"], non_interactive)
+
     method = value_choice("  手法", ["hierarchical", "kmeans", "both"], "both", non_interactive)
     k = value_int("  クラスタ数 (k-means用) [3]: ", 3, non_interactive)
     dist_method = value_choice("  距離指標", ["euclidean", "pearson", "spearman"], "euclidean", non_interactive)
     top_n = value_int("  使用する上位変動遺伝子数 [1000]: ", 1000, non_interactive)
     target_genes = value_path("  対象遺伝子CSV (空=top_nを使用): ",
                               params["target_genes"], non_interactive, must_exist=False)
+
+    # Auto-resolve target_genes for gene_module / trajectory modes
+    if analysis_mode in ("gene_module", "trajectory") and not target_genes:
+        de_default = str(get_step_output_dir(common["outdir"], "01_DE", params["analysis_name"]) / "de_results.csv")
+        if Path(de_default).exists():
+            target_genes = de_default
+            LOG.info("  target_genes 自動解決: %s", target_genes)
+        else:
+            LOG.warning("  de_results.csv が見つかりません: %s", de_default)
+            LOG.warning("  先に Step 1 (DE) を実行するか、--target-genes で CSV を指定してください。")
+
     trend_x_col = value_text("  Trend plot の x 軸 metadata column (空=スキップ): ",
                              params["trend_x_col"], non_interactive)
+    group_col = value_text("  Trajectory group coloring column [condition]: ",
+                           params["group_col"], non_interactive)
     label_mode = value_choice("  サンプルラベル表示 [sampleID_only/symbol_only/both]: ",
                               ["sampleID_only", "symbol_only", "both"],
                               params["label_mode"], non_interactive)
     symbol_col = value_text("  ラベルに使う metadata column (必要時のみ): ",
                             params["symbol_col"], non_interactive)
 
-    args = {**common, "method": method, "k": k,
+    args = {**common, "analysis_mode": analysis_mode,
+            "method": method, "k": k,
             "dist_method": dist_method, "top_n": top_n,
             "target_genes": target_genes, "trend_x_col": trend_x_col,
+            "group_col": group_col,
             "label_mode": label_mode, "symbol_col": symbol_col}
     return run_r_script("02_sample_clustering.R", args, dry_run=dry_run)
 
@@ -1023,6 +1045,9 @@ def main():
     parser.add_argument("--subset-val", type=str, help="Comma-separated metadata values used for DE subsetting")
     parser.add_argument("--target-genes", type=str, help="Target gene CSV for clustering")
     parser.add_argument("--trend-x-col", type=str, help="Metadata column used on the clustering trend-plot x-axis")
+    parser.add_argument("--analysis-mode", type=str, choices=["sample", "gene_module", "trajectory"],
+                        help="Clustering analysis mode: sample, gene_module, trajectory")
+    parser.add_argument("--group-col", type=str, help="Metadata column for trajectory group coloring")
     parser.add_argument("--label-mode", type=str, choices=["sampleID_only", "symbol_only", "both"],
                         help="Sample label format for plots")
     parser.add_argument("--symbol-col", type=str, help="Metadata column used as the sample symbol label")
@@ -1139,6 +1164,8 @@ def main():
         "subset_val": get_param(cfg, args, "subset_val", ""),
         "target_genes": get_param(cfg, args, "target_genes", ""),
         "trend_x_col": get_param(cfg, args, "trend_x_col", ""),
+        "analysis_mode": get_param(cfg, args, "analysis_mode", "sample"),
+        "group_col": get_param(cfg, args, "group_col", ""),
         "label_mode": get_param(cfg, args, "label_mode", "sampleID_only"),
         "symbol_col": get_param(cfg, args, "symbol_col", ""),
         "detect_modules": parse_bool(get_param(cfg, args, "detect_modules", False), default=False),
@@ -1164,6 +1191,9 @@ def main():
     if params["label_mode"] not in {"sampleID_only", "symbol_only", "both"}:
         LOG.warning("label_mode が不正なため 'sampleID_only' に変更します: %s", params["label_mode"])
         params["label_mode"] = "sampleID_only"
+    if params["analysis_mode"] not in {"sample", "gene_module", "trajectory"}:
+        LOG.warning("analysis_mode が不正なため 'sample' に変更します: %s", params["analysis_mode"])
+        params["analysis_mode"] = "sample"
 
     get_organism_args(cfg, args, interactive=not args.non_interactive, config_path=args.config)
     run_selection = args.run if args.run else ("interactive" if not args.non_interactive else "none")

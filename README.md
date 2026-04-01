@@ -208,7 +208,7 @@ docker run --rm rnaseq-pipeline:v1.0.0 \
 | ステップ | 名称 | 説明 |
 |---|---|---|
 | 1 | **差次的発現解析** | DESeq2 / edgeR / limma による DE 遺伝子検出 |
-| 2 | **サンプルクラスタリング** | 階層クラスタリングと k-means |
+| 2 | **サンプルクラスタリング** | 階層クラスタリング、k-means、遺伝子モジュール、トラジェクトリ解析 |
 | 3 | **次元削減** | PCA / t-SNE / UMAP と診断解析 |
 | 4 | **正規化** | DESeq2 / TMM / log2 正規化比較 |
 | 5 | **発現パターン解析** | 遺伝子発現パターン解析 |
@@ -285,19 +285,47 @@ interaction:  ~ dpf + genotype + dpf:genotype
 
 `--gsea-ranking-metric` は、GSEA 実行前にどの値で遺伝子を順位付けするかを制御します。`stat` は DESeq2 の検定統計量を使いたい場合に適しており、`custom` は上流の DE 結果ファイルに必要な独自ランキング列が含まれている場合にのみ使用してください。
 
-### クラスタリング / ネットワーク解析オプション（Step 2 と Step 14）
+### クラスタリングオプション（Step 2）
 
-| オプション | 対象ステップ | 説明 | 既定値 |
-|---|---|---|---|
-| `--target-genes` | 2 | `gene` 列を持つ CSV を指定し、その遺伝子のみクラスタリング | 空 |
-| `--trend-x-col` | 2 | クラスタ trend plot の x 軸に使う metadata 列 | 空 |
-| `--detect-modules` | 14 | ネットワーク解析で WGCNA モジュール検出を有効化する `TRUE/FALSE` | `FALSE` |
-| `--trait-cols` | 14 | モジュール相関に使うメタデータ列をカンマ区切りで指定 | 空 |
+| オプション | 説明 | 既定値 |
+|---|---|---|
+| `--analysis-mode` | 解析モード: `sample`、`gene_module`、`trajectory` | `sample` |
+| `--target-genes` | `gene` 列を持つ CSV を指定し、その遺伝子のみクラスタリング | 空 |
+| `--trend-x-col` | トレンドプロットの x 軸に使う metadata 列 | 空 |
+| `--group-col` | `trajectory` モードでのグループ色分けに使う metadata 列 | 空 |
 
-- `--target-genes` は `gene` 列を持つ CSV を受け取り、既定では `padj < 0.05` の遺伝子だけをクラスタリングに使います。
-- `--trend-x-col` を指定すると、k-means クラスタごとの平均発現トレンドを描画します。列が存在しない場合はエラーになります。
-- `--detect-modules TRUE` は Step 14 の WGCNA 系処理を有効化します。
-- `--trait-cols` には、入力メタデータ内に存在する列名を指定してください。例: `condition,dpf,batch`
+#### 解析モードの説明
+
+| モード | 説明 | 主な出力 |
+|---|---|---|
+| `sample` | 従来のサンプルクラスタリング（階層・ k-means・PCA） | dendrogram, distance_heatmap, kmeans_pca |
+| `gene_module` | 遺伝子レベルの k-means でモジュール分類し、pheatmap で可視化 | gene_module_heatmap, gene_module_assignments.csv |
+| `trajectory` | 遺伝子の Z-score を計算しモジュール別にファセットトレンド図を描画 | cluster_trends |
+
+> **注意:** `trajectory` モードでは `--trend-x-col` と `--group-col` が必須です。未指定の場合はエラーになります。
+
+> **注意:** `gene_module` または `trajectory` モードで `--target-genes` が未指定の場合、Step 1 の `de_results.csv` が自動的に使用されます。
+
+#### クラスタリング使用例
+
+```bash
+# 従来のサンプルクラスタリング（デフォルト）
+python main_pipeline.py --run 2 --non-interactive
+
+# 遺伝子モジュール解析（DE結果から自動取得）
+python main_pipeline.py --run 2 --analysis-mode gene_module --non-interactive
+
+# トラジェクトリ解析
+python main_pipeline.py --run 2 --analysis-mode trajectory \
+  --trend-x-col dpf --group-col genotype --non-interactive
+```
+
+### ネットワーク解析オプション（Step 14）
+
+| オプション | 説明 | 既定値 |
+|---|---|---|
+| `--detect-modules` | ネットワーク解析で WGCNA モジュール検出を有効化する `TRUE/FALSE` | `FALSE` |
+| `--trait-cols` | モジュール相関に使うメタデータ列をカンマ区切りで指定 | 空 |
 
 ### サンプルラベルオプション（Steps 2 / 3 / 4 / 8 / 11）
 
@@ -335,9 +363,14 @@ output/
     │   ├── plots/volcano_plot.pdf
     │   └── logs/sessionInfo.txt
     ├── 02_clustering/
-    │   ├── dendrogram.pdf
-    │   ├── distance_heatmap.pdf
-    │   └── cluster_expression_trend.pdf
+    │   ├── dendrogram.pdf             # sample mode
+    │   ├── distance_heatmap.pdf       # sample mode
+    │   ├── kmeans_pca.pdf             # sample mode
+    │   ├── cluster_expression_trend.pdf  # sample mode (--trend-x-col)
+    │   ├── gene_module_heatmap.pdf    # gene_module mode
+    │   ├── gene_module_assignments.csv  # gene_module mode
+    │   ├── cluster_trends.pdf         # trajectory mode
+    │   └── trajectory_gene_clusters.csv  # trajectory mode
     ├── 03_dimreduc/
     │   ├── pca_plot.pdf
     │   ├── pca_variance_explained.csv

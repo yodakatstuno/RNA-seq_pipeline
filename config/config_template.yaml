@@ -34,6 +34,8 @@ explain_results: false   # Generate interpretation report
 # --- Sample Clustering (Step 2) ---
 target_genes: ''         # CSV path with a required 'gene' column for targeted clustering
 trend_x_col: ''          # Metadata column used on the cluster trend-plot x-axis
+analysis_mode: 'sample'  # sample | gene_module | trajectory
+group_col: ''            # Metadata column for trajectory group coloring (required for trajectory mode)
 
 # --- Plot Labels (Steps 2/3/4/8/11) ---
 label_mode: 'sampleID_only'  # sampleID_only | symbol_only | both
