@@ -13,4 +13,4 @@ services:
       - ./:/app
       - ./data:/data
       - ${HOME}/Output:/app/Output
-    command: [ "--help" ]
+    command: []
