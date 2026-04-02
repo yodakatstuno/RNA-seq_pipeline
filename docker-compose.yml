@@ -1,9 +1,9 @@
 services:
   pipeline:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: rnaseq-pipeline:r4.4.0
+    #build:
+    #  context: .
+    #  dockerfile: Dockerfile
+    image: ghcr.io/yodakatstuno/rnaseq-pipeline:v1.2.2
     working_dir: /app
     environment:
       R_LIBS_USER: /app/.r_libs
@@ -13,4 +13,4 @@ services:
       - ./:/app
       - ./data:/data
       - ${HOME}/Output:/app/Output
-    command: ["--help"]
+    command: [ "--help" ]
