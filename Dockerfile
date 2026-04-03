@@ -45,9 +45,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxml2-dev \
     libxt-dev \
     zlib1g-dev \
- && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
- && locale-gen \
- && rm -rf /var/lib/apt/lists/*
+    && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
+    && locale-gen \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -62,4 +62,4 @@ RUN Rscript --vanilla /app/R/install_exact_dependencies.R
 COPY . /app
 
 ENTRYPOINT ["python3", "main_pipeline.py"]
-CMD ["--help"]
+

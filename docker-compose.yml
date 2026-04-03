@@ -15,4 +15,3 @@ services:
       - ${HOME}/Output:/app/Output
     tty: true
     stdin_open: true
-    command: [ "python3", "main_pipeline.py" ]
