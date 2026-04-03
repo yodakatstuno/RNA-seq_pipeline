@@ -3,7 +3,7 @@ services:
     #build:
     #  context: .
     #  dockerfile: Dockerfile
-    image: ghcr.io/yodakatstuno/rnaseq-pipeline:v1.2.3
+    image: ghcr.io/yodakatstuno/rnaseq-pipeline:v1.2.4
     working_dir: /app
     environment:
       R_LIBS_USER: /app/.r_libs
@@ -13,4 +13,4 @@ services:
       - ./:/app
       - ./data:/data
       - ${HOME}/Output:/app/Output
-    command: []
+    command: [ "python3", "main_pipeline.py" ]
