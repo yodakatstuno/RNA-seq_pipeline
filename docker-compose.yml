@@ -3,7 +3,7 @@ services:
     #build:
     #  context: .
     #  dockerfile: Dockerfile
-    image: ghcr.io/yodakatstuno/rnaseq-pipeline:v1.2.6
+    image: ghcr.io/yodakatstuno/rnaseq-pipeline:v1.2.8
     working_dir: /app
     environment:
       R_LIBS_USER: /app/.r_libs
