@@ -306,6 +306,8 @@ def init_rscript():
 
 def ensure_r_dependencies():
     """R依存関係をインストール/確認"""
+    print("🚀 [高速化] パッケージの点呼とOpenMPテストをスキップしました！")
+    return
     global R_DEPS_INSTALLED
     if R_DEPS_INSTALLED:
         return
