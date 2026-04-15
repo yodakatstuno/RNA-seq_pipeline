@@ -30,7 +30,7 @@ suppressPackageStartupMessages({
 
 PIPELINE_STEP_DIRS <- c(
   "01_DE", "02_clustering", "03_dimreduc", "04_normalization",
-  "05_expression_pattern", "06_enrichment", "07_gsea",
+  "05_clustering", "05_expression_pattern", "06_enrichment", "07_gsea",
   "08_batch_correction", "09_regression", "10_qc",
   "11_visualization", "12_phenotype", "13_ml",
   "14_network", "15_singlecell"
@@ -325,6 +325,128 @@ select_top_variable <- function(counts, top_n = 2000) {
   top_genes <- names(sort(vars, decreasing = TRUE))[1:min(top_n, length(vars))]
   message("[INFO] 上位 ", length(top_genes), " 変動遺伝子を選択")
   return(counts[top_genes, , drop = FALSE])
+}
+
+infer_transform_design <- function(meta) {
+  if (all(c("genotype", "dpf") %in% colnames(meta))) {
+    message("[INFO] DESeq2 transform design: ~ genotype + dpf")
+    return(stats::as.formula("~ genotype + dpf"))
+  }
+  message("[INFO] DESeq2 transform design: ~ 1")
+  stats::as.formula("~ 1")
+}
+
+prepare_transform_metadata <- function(meta) {
+  meta_prepared <- meta
+  if (!is.null(rownames(meta_prepared)) && any(rownames(meta_prepared) == "")) {
+    stop("[ERROR] metadata の行名にサンプルIDが必要です。")
+  }
+  for (cn in colnames(meta_prepared)) {
+    if (cn == "dpf" && !is.factor(meta_prepared[[cn]])) {
+      meta_prepared[[cn]] <- as.factor(meta_prepared[[cn]])
+      next
+    }
+    if (is.character(meta_prepared[[cn]]) || is.logical(meta_prepared[[cn]])) {
+      meta_prepared[[cn]] <- as.factor(meta_prepared[[cn]])
+    }
+  }
+  meta_prepared
+}
+
+create_transform_dds <- function(counts, meta) {
+  suppressPackageStartupMessages(library(DESeq2))
+  counts_int <- round(as.matrix(counts))
+  storage.mode(counts_int) <- "integer"
+  meta_prepared <- prepare_transform_metadata(meta)
+  design_formula <- infer_transform_design(meta_prepared)
+  dds <- DESeq2::DESeqDataSetFromMatrix(
+    countData = counts_int,
+    colData = meta_prepared,
+    design = design_formula
+  )
+  DESeq2::estimateSizeFactors(dds)
+}
+
+row_zscore_matrix <- function(mat, center = TRUE, scale = TRUE) {
+  z_mat <- t(scale(t(as.matrix(mat)), center = center, scale = scale))
+  z_mat[is.na(z_mat)] <- 0
+  z_mat
+}
+
+normalize_counts_matrix <- function(counts, meta, method,
+                                    force_rlog = FALSE,
+                                    rlog_max_samples = 30) {
+  method <- tolower(trimws(as.character(method)))
+
+  if (method == "deseq2") {
+    dds <- create_transform_dds(counts, meta)
+    return(list(
+      matrix = DESeq2::counts(dds, normalized = TRUE),
+      extras = list(size_factors = DESeq2::sizeFactors(dds))
+    ))
+  }
+
+  if (method %in% c("tmm", "cpm")) {
+    suppressPackageStartupMessages(library(edgeR))
+    y <- edgeR::DGEList(counts = counts)
+    y <- edgeR::calcNormFactors(y, method = "TMM")
+    return(list(
+      matrix = edgeR::cpm(y, normalized.lib.sizes = TRUE),
+      extras = list(norm_factors = y$samples)
+    ))
+  }
+
+  if (method == "log2") {
+    return(list(matrix = log2(as.matrix(counts) + 1), extras = list()))
+  }
+
+  if (method == "vst") {
+    dds <- create_transform_dds(counts, meta)
+    vsd <- tryCatch(
+      DESeq2::vst(dds, blind = FALSE),
+      error = function(e) {
+        if (grepl("less than 'nsub' rows", e$message, fixed = TRUE)) {
+          message("[WARN] VST failed (nsub issue on a small matrix). Falling back to DESeq2::varianceStabilizingTransformation(blind=FALSE).")
+          return(DESeq2::varianceStabilizingTransformation(dds, blind = FALSE))
+        }
+        stop(e)
+      }
+    )
+    return(list(matrix = SummarizedExperiment::assay(vsd), extras = list()))
+  }
+
+  if (method == "rlog") {
+    if (ncol(counts) > rlog_max_samples && !isTRUE(force_rlog)) {
+      stop("[ERROR] rlog はサンプル数が多いと非常に重くなります。--force_rlog TRUE を指定するか、サンプル数を減らしてください。")
+    }
+    dds <- create_transform_dds(counts, meta)
+    rld <- DESeq2::rlog(dds, blind = FALSE)
+    return(list(matrix = SummarizedExperiment::assay(rld), extras = list()))
+  }
+
+  if (method == "zscore") {
+    return(list(matrix = row_zscore_matrix(counts), extras = list()))
+  }
+
+  stop("[ERROR] 未対応の normalization method: ", method)
+}
+
+autodetect_metadata_column <- function(meta, preferred = character(0), patterns = character(0)) {
+  preferred <- preferred[preferred %in% colnames(meta)]
+  if (length(preferred) > 0) {
+    return(preferred[[1]])
+  }
+
+  if (length(patterns) > 0) {
+    for (pat in patterns) {
+      hits <- grep(pat, colnames(meta), ignore.case = TRUE, value = TRUE)
+      if (length(hits) > 0) {
+        return(hits[[1]])
+      }
+    }
+  }
+
+  NULL
 }
 
 message("[INFO] 00_load_data.R ユーティリティ読み込み完了")

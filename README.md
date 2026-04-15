@@ -33,6 +33,7 @@ conda env create -f environment.yml
 conda activate rnaseq_env
 Rscript R/install_missing_packages.R
 python main_pipeline.py --example
+python main_pipeline.py --sampledata --run clustering --non-interactive
 ```
 
 ---
@@ -165,12 +166,15 @@ python main_pipeline.py \
 
 ### サンプルデータ実行モード
 
-合成データを自動生成してパイプラインを実行します。
+合成データを自動生成してパイプラインを実行します。`--sampledata` と `--debug` は `--example` のエイリアスです。
 
 ```bash
 python main_pipeline.py --example
 python main_pipeline.py --example --run all
+python main_pipeline.py --sampledata --run clustering --non-interactive
 ```
+
+入力ファイルが未指定で、かつ設定ファイルにも `counts_path` / `metadata_path` が保存されていない状態で `--non-interactive` または `--run` を使う場合も、サンプルデータモードへ自動でフォールバックします。
 
 ### Docker での実行
 
@@ -211,7 +215,8 @@ docker run --rm rnaseq-pipeline:v1.0.0 \
 | 2 | **サンプルクラスタリング** | 階層クラスタリング、k-means、遺伝子モジュール、トラジェクトリ解析 |
 | 3 | **次元削減** | PCA / t-SNE / UMAP と診断解析 |
 | 4 | **正規化** | DESeq2 / TMM / log2 正規化比較 |
-| 5 | **発現パターン解析** | 遺伝子発現パターン解析 |
+| clustering | **時系列クラスタリング (`05_clustering`)** | VST などを入力にした遺伝子の階層クラスタリング / k-means |
+| 5 | **発現パターン解析** | WGCNA ベースの共発現パターン解析 |
 | 6 | **機能富化解析** | GO / KEGG / Reactome の ORA |
 | 7 | **GSEA** | Gene Set Enrichment Analysis |
 | 8 | **バッチ補正** | ComBat / ComBat-seq による補正 |
@@ -235,13 +240,99 @@ docker run --rm rnaseq-pipeline:v1.0.0 \
 | `--metadata <path>` | メタデータ（`.xlsx` / `.csv`） | なし |
 | `--organism <name>` | `human`、`mouse`、`zebrafish` | なし |
 | `--config <path>` | 設定 YAML ファイル | `config.yaml` |
-| `--run <step>` | `all`、`1`–`15`、`de`、`enrichment`、`gsea` | なし |
+| `--run <step>` | `all`、`1`–`15`、`de`、`enrichment`、`gsea`、`clustering` | なし |
 | `--outdir <path>` | 互換性維持のため受理。実際の出力先は常に `~/Output` または `PIPELINE_OUTPUT_DIR` 配下の `run_YYYY-MM-DD_HH-MM-SS/` | `~/Output` |
 | `--non-interactive` | 対話なしで実行 | off |
 | `--dry-run` | コマンドのみ表示 | off |
 | `--example` | 内蔵 example データで実行 | off |
+| `--sampledata` | `--example` の別名 | off |
+| `--debug` | サンプルデータでデバッグ実行 | off |
 | `--describe` | ステップ説明を表示 | off |
 | `--list-steps` | ステップ一覧を表示 | off |
+
+### 正規化オプション（Step 4）
+
+`04_normalization.R` は従来の `deseq2` / `tmm` / `log2` を維持したまま、追加で `vst` / `rlog` / `cpm` / `zscore` を明示指定できます。既定の `--method all` は互換性維持のため従来どおり `deseq2,tmm,log2` のみを実行します。
+
+- `normalized_vst.*`: `DESeq2::vst()` を使用。`genotype` と `dpf` が両方ある場合は `~ genotype + dpf`、なければ `~ 1`、`blind=FALSE`
+- `normalized_rlog.*`: 小規模サンプル向けの `DESeq2::rlog()`。大規模サンプルでは `--force-rlog TRUE` が必要
+- `normalized_cpm.*`: `edgeR::cpm()` による CPM 出力
+- `scaled_zscore.*`: 行方向 Z-score。クラスタリング用の別出力で、元の正規化行列は上書きしません
+
+使い分けの目安:
+
+- `vst`: サンプル間比較と時系列クラスタリングの既定値
+- `log2(count+1)`: 軽量な確認用
+- `TMM/CPM`: ライブラリサイズ差を意識した edgeR 系の可視化向け
+- `rlog`: サンプル数が少ない場合の安定した変換
+
+### 時系列クラスタリング（05_clustering）
+
+`05_clustering` は新しい任意モジュールで、既存の numbered steps には影響しません。既定では VST 行列を使い、行方向 Z-score を前処理としてから遺伝子をクラスタリングします。
+
+- 入力: 既定は `vst`。`deseq2` / `tmm` / `log2` / `rlog` / `cpm` も選択可能
+- 手法: `hierarchical`、`kmeans`、または `both`
+- メタデータ: `genotype` / `dpf` があれば自動利用し、なければ安全にフォールバック
+- 出力: クラスタ割り当て CSV、heatmap PDF/PNG、cluster mean expression plot、clustered matrix
+
+主要オプション:
+
+- `--run clustering`
+- `--normalization-method vst`
+- `--cluster-method both`
+- `--clustering-k 6`
+- `--clustering-dist-method euclidean`
+- `--clustering-top-n 1000`
+- `--top-method variance`
+- `--time-col dpf`
+- `--group-col genotype`
+
+実行例:
+
+```bash
+python main_pipeline.py \
+  --counts /path/to/counts.rds \
+  --metadata /path/to/meta.csv \
+  --organism zebrafish \
+  --run clustering \
+  --normalization-method vst \
+  --cluster-method both \
+  --time-col dpf \
+  --group-col genotype \
+  --non-interactive
+```
+
+```bash
+Rscript --vanilla R/04_normalization.R \
+  --counts /path/to/counts.rds \
+  --metadata /path/to/meta.csv \
+  --outdir /tmp/rnaseq_norm \
+  --method all,vst,cpm,zscore
+```
+
+```bash
+Rscript --vanilla R/05_clustering.R \
+  --counts /path/to/counts.rds \
+  --metadata /path/to/meta.csv \
+  --outdir /tmp/rnaseq_cluster \
+  --normalization_method vst \
+  --cluster_method both \
+  --top_method variance \
+  --time_col dpf \
+  --group_col genotype
+```
+
+### Reproducibility and Clustering Behavior
+
+- `05_clustering` の k-means は `set.seed(123)` を使って再現可能にしています。
+- VST は既定の主変換です。`DESeq2::vst()` が小さい行列で `nsub` 問題を起こした場合は、`DESeq2::varianceStabilizingTransformation(blind=FALSE)` へ明示的にフォールバックし、その判断をログへ出力します。
+- Z-score は正規化法ではなく、クラスタリング用の下流変換です。`scaled_zscore.*` は保存されますが、`05_clustering` は毎回内部で Z-score を再計算します。
+- `--top-method` で遺伝子選択基準を指定できます。
+  `variance`: 行分散上位
+  `mean`: 平均発現量上位
+  `deg`: `target_genes` / DE 結果ベース
+- `group_col` が `genotype`、`time_col` が `dpf` の場合、クラスタ平均プロットは genotype を色分けし、利用可能なら `condition` を shape / linetype overlay として表示します。
+- macOS では OpenMP 由来の `OMP: Error #179` や `Abort trap` が依存チェック中に出ることがあります。このパイプラインではそれらを致命的エラーとして扱わず、OpenMP 依存ステップのみ安全にスキップします。
 
 ### 差次的発現解析オプション（Step 1）
 

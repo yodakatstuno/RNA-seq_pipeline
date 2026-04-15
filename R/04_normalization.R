@@ -6,11 +6,16 @@
 #
 # PURPOSE:
 #   Normalizes raw counts using DESeq2 size factors, TMM (edgeR),
-#   and/or log2(counts+1). Produces comparison box plots.
+#   log2(counts+1), and optional advanced transforms such as
+#   VST / rlog / CPM / row-wise Z-score.
 #
 # INPUTS:  --counts, --metadata (standard)
-# PARAMS:  --method (deseq2|tmm|log2|all)
-# OUTPUTS: normalized_*.rds/csv, normalization_comparison.pdf
+# PARAMS:  --method (legacy: deseq2|tmm|log2|all; extended: comma-separated)
+# OUTPUTS: normalized_*.rds/csv, scaled_zscore.rds/csv, normalization_comparison.pdf
+#
+# NOTE:
+#   The legacy meaning of --method all is preserved intentionally:
+#   deseq2 + tmm + log2 only.
 #
 # ============================================================
 
@@ -35,7 +40,10 @@ suppressPackageStartupMessages({
 })
 
 option_list <- c(base_option_list, list(
-  make_option("--method", type = "character", default = "all")
+  make_option("--method", type = "character", default = "all"),
+  make_option("--force_rlog", type = "character", default = "FALSE"),
+  make_option("--rlog_max_samples", type = "integer", default = 30),
+  make_option("--zscore_source", type = "character", default = "vst")
 ))
 
 opt <- parse_args(OptionParser(option_list = option_list))
@@ -48,94 +56,171 @@ counts     <- dat$counts
 meta       <- dat$metadata
 sample_labels <- build_sample_labels(meta, opt$label_mode, opt$symbol_col)
 
-methods <- if (opt$method == "all") c("deseq2", "tmm", "log2") else opt$method
+parse_methods <- function(method_arg) {
+  tokens <- trimws(unlist(strsplit(tolower(method_arg), ",")))
+  tokens <- tokens[tokens != ""]
+  if (length(tokens) == 0) {
+    tokens <- "all"
+  }
 
-# ---- DESeq2 size factor normalization ----
-if ("deseq2" %in% methods) {
-  suppressPackageStartupMessages(library(DESeq2))
-  message("[INFO] DESeq2 正規化...")
+  expanded <- character(0)
+  for (token in tokens) {
+    if (token == "all") {
+      expanded <- c(expanded, "deseq2", "tmm", "log2")
+    } else {
+      expanded <- c(expanded, token)
+    }
+  }
 
-  dds <- DESeqDataSetFromMatrix(countData = counts,
-                                 colData = meta,
-                                 design = ~ 1)
-  dds <- estimateSizeFactors(dds)
-  norm_deseq2 <- counts(dds, normalized = TRUE)
-
-  saveRDS(norm_deseq2, file.path(out_sub, "normalized_deseq2.rds"))
-  write.csv(norm_deseq2, file.path(out_sub, "normalized_deseq2.csv"))
-
-  sf <- sizeFactors(dds)
-  write.csv(data.frame(sample = names(sf), size_factor = sf),
-            file.path(out_sub, "size_factors.csv"), row.names = FALSE)
+  allowed <- c("deseq2", "tmm", "log2", "vst", "rlog", "cpm", "zscore")
+  invalid <- setdiff(unique(expanded), allowed)
+  if (length(invalid) > 0) {
+    stop("[ERROR] 未対応の method: ", paste(invalid, collapse = ", "))
+  }
+  unique(expanded)
 }
 
-# ---- TMM normalization ----
-if ("tmm" %in% methods) {
-  suppressPackageStartupMessages(library(edgeR))
-  message("[INFO] TMM 正規化...")
-
-  y <- DGEList(counts = counts)
-  y <- calcNormFactors(y, method = "TMM")
-  norm_tmm <- cpm(y, normalized.lib.sizes = TRUE)
-
-  saveRDS(norm_tmm, file.path(out_sub, "normalized_tmm.rds"))
-  write.csv(norm_tmm, file.path(out_sub, "normalized_tmm.csv"))
-
-  nf <- y$samples
-  write.csv(nf, file.path(out_sub, "tmm_norm_factors.csv"))
+save_matrix_outputs <- function(mat, stem) {
+  saveRDS(mat, file.path(out_sub, paste0(stem, ".rds")))
+  write.csv(mat, file.path(out_sub, paste0(stem, ".csv")))
 }
 
-# ---- log2 変換 ----
-if ("log2" %in% methods) {
-  message("[INFO] log2(counts + 1) 変換...")
-  log2_counts <- log2(counts + 1)
-
-  saveRDS(log2_counts, file.path(out_sub, "normalized_log2.rds"))
-  write.csv(log2_counts, file.path(out_sub, "normalized_log2.csv"))
+plot_ready_label <- function(method) {
+  switch(
+    method,
+    "deseq2" = "DESeq2 (log2)",
+    "tmm" = "TMM CPM (log2)",
+    "log2" = "log2(counts + 1)",
+    "vst" = "VST",
+    "rlog" = "rlog",
+    "cpm" = "CPM (log2)",
+    NULL
+  )
 }
 
-# ---- 分布比較プロット ----
+results <- list()
+methods <- parse_methods(opt$method)
+normalization_methods <- intersect(methods, c("deseq2", "tmm", "log2", "vst", "rlog", "cpm"))
+downstream_transforms <- intersect(methods, c("zscore"))
+force_rlog <- parse_bool(opt$force_rlog)
+zscore_source <- tolower(trimws(opt$zscore_source))
+
+message("[INFO] 実行する正規化手法: ", paste(normalization_methods, collapse = ", "))
+if (length(downstream_transforms) > 0) {
+  message("[INFO] 下流変換として実行: ", paste(downstream_transforms, collapse = ", "))
+}
+
+for (method in normalization_methods) {
+  message("[INFO] 正規化実行: ", method)
+  result <- normalize_counts_matrix(
+    counts = counts,
+    meta = meta,
+    method = method,
+    force_rlog = force_rlog,
+    rlog_max_samples = opt$rlog_max_samples
+  )
+  results[[method]] <- result$matrix
+
+  stem <- switch(
+    method,
+    "deseq2" = "normalized_deseq2",
+    "tmm" = "normalized_tmm",
+    "log2" = "normalized_log2",
+    "vst" = "normalized_vst",
+    "rlog" = "normalized_rlog",
+    "cpm" = "normalized_cpm"
+  )
+  save_matrix_outputs(result$matrix, stem)
+
+  if (method == "deseq2" && !is.null(result$extras$size_factors)) {
+    sf <- result$extras$size_factors
+    write.csv(
+      data.frame(sample = names(sf), size_factor = sf),
+      file.path(out_sub, "size_factors.csv"),
+      row.names = FALSE
+    )
+  }
+
+  if (method %in% c("tmm", "cpm") && !is.null(result$extras$norm_factors)) {
+    write.csv(result$extras$norm_factors,
+              file.path(out_sub, "tmm_norm_factors.csv"))
+  }
+}
+
+if ("zscore" %in% methods) {
+  allowed_sources <- c("deseq2", "tmm", "log2", "vst", "rlog", "cpm")
+  if (!(zscore_source %in% allowed_sources)) {
+    stop("[ERROR] zscore_source は ", paste(allowed_sources, collapse = ", "),
+         " のいずれかです。")
+  }
+
+  if (is.null(results[[zscore_source]])) {
+    message("[INFO] Z-score 用の元データを作成: ", zscore_source)
+    source_result <- normalize_counts_matrix(
+      counts = counts,
+      meta = meta,
+      method = zscore_source,
+      force_rlog = force_rlog,
+      rlog_max_samples = opt$rlog_max_samples
+    )
+    results[[zscore_source]] <- source_result$matrix
+  }
+
+  message("[INFO] 行方向 Z-score 変換を下流処理として実行: source=", zscore_source)
+  zscore_mat <- row_zscore_matrix(results[[zscore_source]])
+  save_matrix_outputs(zscore_mat, "scaled_zscore")
+  writeLines(
+    paste0("source_method=", zscore_source),
+    con = file.path(out_sub, "scaled_zscore_source.txt")
+  )
+  results[["zscore"]] <- zscore_mat
+}
+
 message("[INFO] 分布比較プロット作成...")
-
-# box plot: raw vs normalized
 raw_long <- data.frame(
   sample = rep(colnames(counts), each = nrow(counts)),
   value = as.vector(log2(counts + 1)),
-  type = "Raw (log2)"
+  type = "Raw (log2)",
+  stringsAsFactors = FALSE
 )
-raw_long$sample_label <- factor(sample_labels[raw_long$sample], levels = sample_labels[colnames(counts)])
+raw_long$sample_label <- factor(
+  sample_labels[raw_long$sample],
+  levels = sample_labels[colnames(counts)]
+)
 
 plot_list <- list(raw_long)
-
-if ("deseq2" %in% methods) {
-  deseq2_long <- data.frame(
-    sample = rep(colnames(norm_deseq2), each = nrow(norm_deseq2)),
-    value = as.vector(log2(norm_deseq2 + 1)),
-    type = "DESeq2 (log2)"
+for (method in names(results)) {
+  method_label <- plot_ready_label(method)
+  if (is.null(method_label)) {
+    next
+  }
+  mat <- results[[method]]
+  plot_values <- if (method %in% c("deseq2", "tmm", "cpm")) log2(mat + 1) else mat
+  method_long <- data.frame(
+    sample = rep(colnames(mat), each = nrow(mat)),
+    value = as.vector(plot_values),
+    type = method_label,
+    stringsAsFactors = FALSE
   )
-  deseq2_long$sample_label <- factor(sample_labels[deseq2_long$sample], levels = sample_labels[colnames(counts)])
-  plot_list <- c(plot_list, list(deseq2_long))
-}
-
-if ("tmm" %in% methods) {
-  tmm_long <- data.frame(
-    sample = rep(colnames(norm_tmm), each = nrow(norm_tmm)),
-    value = as.vector(log2(norm_tmm + 1)),
-    type = "TMM CPM (log2)"
+  method_long$sample_label <- factor(
+    sample_labels[method_long$sample],
+    levels = sample_labels[colnames(counts)]
   )
-  tmm_long$sample_label <- factor(sample_labels[tmm_long$sample], levels = sample_labels[colnames(counts)])
-  plot_list <- c(plot_list, list(tmm_long))
+  plot_list[[length(plot_list) + 1]] <- method_long
 }
 
 all_long <- do.call(rbind, plot_list)
 
 p <- ggplot(all_long, aes(x = sample_label, y = value, fill = type)) +
   geom_boxplot(outlier.size = 0.3) +
-  facet_wrap(~type, scales = "free_y", ncol = 1) +
+  facet_wrap(~ type, scales = "free_y", ncol = 1) +
   theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1,
-                                   size = sample_label_fontsize(length(sample_labels)))) +
-  labs(title = "Normalization Comparison", x = "", y = "log2 Expression")
+  theme(axis.text.x = element_text(
+    angle = 45, hjust = 1,
+    size = sample_label_fontsize(length(sample_labels))
+  )) +
+  labs(title = "Normalization Comparison", x = "", y = "Expression")
+
 ggsave(file.path(out_sub, "normalization_comparison.pdf"), p,
        width = max(12, ncol(counts) * 0.5), height = 12)
 ggsave(file.path(out_sub, "normalization_comparison.png"), p,

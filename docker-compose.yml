@@ -1,16 +1,16 @@
 services:
   pipeline:
-    #build:
-    #  context: .
-    #  dockerfile: Dockerfile
-    image: ghcr.io/yodakatstuno/rnaseq-pipeline:v1.2.8
+    image: ghcr.io/yodakatstuno/rnaseq-pipeline:v1.2.9
     working_dir: /app
     environment:
       R_LIBS_USER: /app/.r_libs
       PIPELINE_OUTPUT_DIR: /app/Output
     user: "${UID:-0}:${GID:-0}"
     volumes:
-      - ./:/app
+      # プログラム（.pyや.R）だけをマウントし、.r_libs はマウントしない
+      - ./main_pipeline.py:/app/main_pipeline.py
+      - ./R:/app/R
+      - ./dependencies:/app/dependencies
       - ./data:/data
       - ${HOME}/Output:/app/Output
     tty: true

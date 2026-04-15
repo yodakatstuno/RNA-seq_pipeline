@@ -116,6 +116,9 @@ def build_steps(args):
              "--color_by", args.color_by]),
         (4, ["Rscript", "R/04_normalization.R",
              "--counts", args.counts, "--metadata", args.metadata, "--outdir", str(outdir)]),
+        ("05_clustering", ["Rscript", "R/05_clustering.R",
+                           "--counts", args.counts, "--metadata", args.metadata, "--outdir", str(outdir),
+                           "--normalization_method", "vst", "--cluster_method", "both"]),
         (5, ["Rscript", "R/05_expression_pattern.R",
              "--counts", args.counts, "--metadata", args.metadata, "--outdir", str(outdir),
              "--trait_col", args.condition_col]),
@@ -192,7 +195,8 @@ def main():
 
     results = []
     for step, cmd in build_steps(args):
-        log_path = log_dir / f"step_{step:02d}.log"
+        step_slug = f"{step:02d}" if isinstance(step, int) else str(step)
+        log_path = log_dir / f"step_{step_slug}.log"
         if openmp_available is False and step in OPENMP_STEPS:
             results.append((step, "SKIPPED", "OpenMP unavailable"))
             continue
@@ -247,7 +251,11 @@ def main():
 
         f.write("\nR script validation results:\n")
         for step, status, info in results:
-            f.write(f"- Step {step:02d}: {status} ({info})\n")
+            if isinstance(step, int):
+                step_label = f"{step:02d}"
+            else:
+                step_label = str(step)
+            f.write(f"- Step {step_label}: {status} ({info})\n")
 
     print(f"[INFO] Wrote {report_path}")
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env Rscript
 # ============================================================
 # generate_example.R
-# Creates a minimal synthetic RNA-seq dataset for testing
+# Creates a synthetic RNA-seq dataset for testing/debugging
 # Output: example/counts.rds, example/metadata.csv
 # ============================================================
 
@@ -9,60 +9,77 @@ message("[INFO] Generating example dataset...")
 
 set.seed(42)
 
-# Parameters
-n_genes <- 200
-n_samples <- 12
-conditions <- rep(c("control", "treatment"), each = 6)
-dpf_levels <- rep(c(3, 5), times = 6)
-batch <- rep(c("A", "B"), each = 6)
+n_genes <- 300
+genotypes <- c("WT", "MUT")
+dpf_levels <- c(3, 5, 7)
+replicates <- 2
 
-# Sample IDs
-sample_ids <- paste0("sample_", sprintf("%02d", 1:n_samples))
+design <- expand.grid(
+  genotype = genotypes,
+  dpf = dpf_levels,
+  rep = seq_len(replicates),
+  stringsAsFactors = FALSE
+)
+design <- design[order(design$genotype, design$dpf, design$rep), , drop = FALSE]
+n_samples <- nrow(design)
 
-# Metadata
+sample_ids <- paste0("sample_", sprintf("%02d", seq_len(n_samples)))
+condition <- ifelse(design$genotype == "WT", "control", "treatment")
+batch <- rep(c("A", "B"), length.out = n_samples)
+
 meta <- data.frame(
   sample_id = sample_ids,
-  condition = conditions,
-  dpf = dpf_levels,
+  condition = condition,
+  genotype = design$genotype,
+  dpf = design$dpf,
   batch = batch,
+  replicate = design$rep,
   stringsAsFactors = FALSE
 )
 
-# Base expression (Poisson-like counts)
-gene_names <- paste0("Gene_", sprintf("%03d", 1:n_genes))
-base_means <- runif(n_genes, min = 50, max = 5000)
+gene_names <- paste0("Gene_", sprintf("%03d", seq_len(n_genes)))
+base_means <- runif(n_genes, min = 30, max = 3000)
 
-counts <- matrix(0, nrow = n_genes, ncol = n_samples,
-                 dimnames = list(gene_names, sample_ids))
+counts <- matrix(
+  0,
+  nrow = n_genes,
+  ncol = n_samples,
+  dimnames = list(gene_names, sample_ids)
+)
 
-for (j in 1:n_samples) {
-  counts[, j] <- rnbinom(n_genes, mu = base_means, size = 10)
+time_scale <- c(`3` = 0.85, `5` = 1.10, `7` = 1.40)
+geno_scale <- c(WT = 1.0, MUT = 1.15)
+
+for (j in seq_len(n_samples)) {
+  sample_mu <- base_means * time_scale[as.character(meta$dpf[j])] * geno_scale[meta$genotype[j]]
+
+  if (meta$genotype[j] == "MUT") {
+    sample_mu[1:10] <- sample_mu[1:10] * (1.8 + 0.25 * meta$dpf[j])
+    sample_mu[11:20] <- sample_mu[11:20] / (1.6 + 0.15 * meta$dpf[j])
+  }
+
+  sample_mu[21:30] <- sample_mu[21:30] * c(`3` = 0.7, `5` = 1.0, `7` = 1.5)[as.character(meta$dpf[j])]
+  sample_mu[31:40] <- sample_mu[31:40] * c(`3` = 1.4, `5` = 1.0, `7` = 0.65)[as.character(meta$dpf[j])]
+
+  if (meta$genotype[j] == "MUT" && meta$dpf[j] == 7) {
+    sample_mu[41:55] <- sample_mu[41:55] * 2.5
+  }
+
+  counts[, j] <- rnbinom(n_genes, mu = sample_mu, size = 12)
 }
 
-# Inject DE genes (first 20 genes are differentially expressed)
-n_de <- 20
-for (j in which(conditions == "treatment")) {
-  # Up-regulated in treatment (genes 1-10)
-  counts[1:10, j] <- counts[1:10, j] * sample(c(3, 4, 5), 10, replace = TRUE)
-  # Down-regulated in treatment (genes 11-20)
-  counts[11:n_de, j] <- round(counts[11:n_de, j] / sample(c(3, 4), 10, replace = TRUE))
-}
-
-# Ensure integer counts
 counts <- round(counts)
 storage.mode(counts) <- "integer"
 
-# Save
-script_path <- tryCatch(sys.frame(1)$ofile, error = function(e) NULL)
-if (is.null(script_path)) script_path <- "."
-out_dir <- file.path(dirname(script_path), ".")
-if (!dir.exists("example")) dir.create("example", recursive = TRUE)
+if (!dir.exists("example")) {
+  dir.create("example", recursive = TRUE)
+}
 saveRDS(counts, "example/counts.rds")
 write.csv(meta, "example/metadata.csv", row.names = FALSE)
 
 message("[INFO] Example dataset created:")
 message("[INFO]   Counts: example/counts.rds (", n_genes, " genes x ", n_samples, " samples)")
 message("[INFO]   Metadata: example/metadata.csv")
-message("[INFO]   DE genes: ", n_de, " (genes 1-10 up, 11-20 down in treatment)")
-message("[INFO]   Conditions: ", paste(unique(conditions), collapse = ", "))
-message("[INFO]   DPF levels: ", paste(unique(dpf_levels), collapse = ", "))
+message("[INFO]   Condition levels: ", paste(unique(meta$condition), collapse = ", "))
+message("[INFO]   Genotypes: ", paste(unique(meta$genotype), collapse = ", "))
+message("[INFO]   DPF levels: ", paste(unique(meta$dpf), collapse = ", "))

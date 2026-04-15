@@ -67,16 +67,64 @@ STEP_NAMES = {
     15: "Single-cell Integration",
 }
 
+SPECIAL_STEP_NAMES = {
+    "clustering": "Time-series Clustering (05_clustering)",
+}
+
 STEP_ALIASES = {
     "1": 1, "de": 1, "diffexp": 1, "differential_expression": 1,
     "6": 6, "enrichment": 6, "functional_enrichment": 6,
     "7": 7, "gsea": 7,
+    "c": "clustering",
+    "clustering": "clustering", "timeseries": "clustering", "05_clustering": "clustering",
     "all": "all",
 }
 
 OPENMP_STEPS = {5, 6, 7, 13, 14, 15}
 OPENMP_AVAILABLE = True
 OPENMP_ERROR = ""
+
+
+def is_harmless_runtime_warning(line):
+    text = (line or "").strip().lower()
+    if not text:
+        return False
+    markers = [
+        "abort trap",
+        "omp: error #179",
+        "openmp runtime is unavailable",
+        "skipping openmp-sensitive steps",
+        "package ‘",
+        "package '",
+        "warning message:",
+        "warning messages:",
+    ]
+    return any(marker in text for marker in markers)
+
+
+def log_subprocess_streams(result):
+    if result.stdout:
+        for line in result.stdout.strip().splitlines():
+            LOG.info("%s", line)
+    if result.stderr:
+        abort_trap_count = 0
+        for line in result.stderr.strip().splitlines():
+            stripped = line.strip()
+            if "abort trap" in stripped.lower():
+                abort_trap_count += 1
+                continue
+            if stripped.startswith("[INFO]") or stripped.startswith("[DEBUG]"):
+                LOG.info("%s", line)
+            elif stripped.startswith("[完了]"):
+                LOG.info("%s", line)
+            elif stripped.startswith("[WARN]") or result.returncode == 0 or is_harmless_runtime_warning(line):
+                LOG.warning("%s", line)
+            else:
+                LOG.error("%s", line)
+        if abort_trap_count > 0:
+            LOG.warning("Suppressed %s non-fatal 'Abort trap' lines from the OpenMP probe during dependency checks.", abort_trap_count)
+
+
 def run_r_script(script_path, args):
     # .Rprofile が存在する /app を作業ディレクトリにする
     result = subprocess.run(
@@ -118,7 +166,7 @@ def ensure_dirs(outdir):
     outdir.mkdir(parents=True, exist_ok=True)
     for sub in [
         "01_DE", "02_clustering", "03_dimreduc", "04_normalization",
-        "05_expression_pattern", "06_enrichment", "07_gsea",
+        "05_clustering", "05_expression_pattern", "06_enrichment", "07_gsea",
         "08_batch_correction", "09_regression", "10_qc",
         "11_visualization", "12_phenotype", "13_ml",
         "14_network", "15_singlecell"
@@ -272,12 +320,7 @@ def ensure_r_dependencies():
     cmd = [RSCRIPT, "--vanilla", str(install_script)]
     LOG.info("R依存関係を確認/インストールします: %s", " ".join(cmd))
     result = subprocess.run(cmd, cwd=str(BASE_DIR), capture_output=True, text=True, env=env)
-    if result.stdout:
-        for line in result.stdout.strip().splitlines():
-            LOG.info("%s", line)
-    if result.stderr:
-        for line in result.stderr.strip().splitlines():
-            LOG.error("%s", line)
+    log_subprocess_streams(result)
     if result.returncode != 0:
         LOG.error("R依存関係のインストールに失敗しました (code=%s)", result.returncode)
         sys.exit(1)
@@ -354,12 +397,7 @@ def run_r_script(script_name, args_dict, dry_run=False, precheck=True):
     else:
         env["PIPELINE_OUTPUT_DIR"] = str(get_output_root())
     result = subprocess.run(cmd, cwd=str(BASE_DIR), capture_output=True, text=True, env=env)
-    if result.stdout:
-        for line in result.stdout.strip().splitlines():
-            LOG.info("%s", line)
-    if result.stderr:
-        for line in result.stderr.strip().splitlines():
-            LOG.error("%s", line)
+    log_subprocess_streams(result)
     if result.returncode != 0:
         LOG.error("%s がエラーで終了しました (code=%s)", script_name, result.returncode)
         return False
@@ -751,6 +789,64 @@ def run_05_expression_pattern(common, params, non_interactive=False, dry_run=Fal
     return run_r_script("05_expression_pattern.R", args, dry_run=dry_run)
 
 
+def run_05_clustering(common, params, non_interactive=False, dry_run=False):
+    LOG.info("--- 05_clustering. 時系列クラスタリング ---")
+    normalization_method = value_choice(
+        "  入力正規化 [vst/deseq2/tmm/log2/rlog/cpm]: ",
+        ["vst", "deseq2", "tmm", "log2", "rlog", "cpm"],
+        params["normalization_method"], non_interactive)
+    cluster_method = value_choice(
+        "  クラスタリング手法 [hierarchical/kmeans/both]: ",
+        ["hierarchical", "kmeans", "both"],
+        params["cluster_method"], non_interactive)
+    k = value_int("  クラスタ数 [6]: ", params["clustering_k"], non_interactive)
+    dist_method = value_choice(
+        "  距離指標 [euclidean/pearson/spearman]: ",
+        ["euclidean", "pearson", "spearman"],
+        params["clustering_dist_method"], non_interactive)
+    top_n = value_int("  使用する上位変動遺伝子数 [1000]: ", params["clustering_top_n"], non_interactive)
+    top_method = value_choice(
+        "  遺伝子選択方法 [variance/mean/deg]: ",
+        ["variance", "mean", "deg"],
+        params["top_method"], non_interactive)
+    target_genes = value_path("  対象遺伝子CSV (空=top_nを使用): ",
+                              params["target_genes"], non_interactive, must_exist=False)
+    if not target_genes:
+        de_default = str(get_step_output_dir(common["outdir"], "01_DE", params["analysis_name"]) / "de_results.csv")
+        if Path(de_default).exists():
+            target_genes = de_default
+            LOG.info("  target_genes 自動解決: %s", target_genes)
+    time_col = value_text("  時系列カラム (空=自動検出。例: dpf): ",
+                          params["time_col"], non_interactive)
+    group_col = value_text("  グループカラム (空=自動検出。例: genotype): ",
+                           params["group_col"], non_interactive)
+    label_mode = value_choice("  サンプルラベル形式 [sampleID_only/symbol_only/both]: ",
+                              ["sampleID_only", "symbol_only", "both"],
+                              params["label_mode"], non_interactive)
+    symbol_col = value_text("  ラベルに使う metadata column (必要時のみ): ",
+                            params["symbol_col"], non_interactive)
+    force_rlog = value_choice("  大規模サンプルでも rlog を許可 [true/false]: ",
+                              ["true", "false"],
+                              "true" if params["force_rlog"] else "false",
+                              non_interactive)
+
+    args = {**common,
+            "normalization_method": normalization_method,
+            "cluster_method": cluster_method,
+            "k": k,
+            "dist_method": dist_method,
+            "top_n": top_n,
+            "top_method": top_method,
+            "target_genes": target_genes,
+            "time_col": time_col,
+            "group_col": group_col,
+            "label_mode": label_mode,
+            "symbol_col": symbol_col,
+            "force_rlog": force_rlog,
+            "rlog_max_samples": params["rlog_max_samples"]}
+    return run_r_script("05_clustering.R", args, dry_run=dry_run)
+
+
 def run_06_enrichment(common, params, non_interactive=False, dry_run=False):
     LOG.info("--- 6. 機能解析 (GO/KEGG/Reactome) ---")
     de_default = str(get_step_output_dir(common["outdir"], "01_DE", params["analysis_name"]) / "de_results.csv")
@@ -983,6 +1079,7 @@ MENU = """
 ║   8.  バッチ効果補正                                     ║
 ║                                                          ║
 ║  [ 遺伝子機能解析 ]                                      ║
+║   C.  時系列クラスタリング (05_clustering)               ║
 ║   5.  発現パターン解析 (WGCNA)                           ║
 ║   6.  機能解析 (GO / KEGG / Reactome)                    ║
 ║   7.  GSEA                                               ║
@@ -1016,7 +1113,7 @@ def main():
                         help="Config YAML path")
     parser.add_argument("--non-interactive", action="store_true",
                         help="Disable prompts and require CLI values")
-    parser.add_argument("--run", type=str, help="Run step: all, 1, 6, or 7")
+    parser.add_argument("--run", type=str, help="Run step: all, 1, 6, 7, or clustering")
     parser.add_argument("--outdir", type=str, help="Output directory (retained for compatibility; results are written to ~/Output or PIPELINE_OUTPUT_DIR)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Validate and print commands without executing")
@@ -1048,14 +1145,31 @@ def main():
     parser.add_argument("--analysis-mode", type=str, choices=["sample", "gene_module", "trajectory"],
                         help="Clustering analysis mode: sample, gene_module, trajectory")
     parser.add_argument("--group-col", type=str, help="Metadata column for trajectory group coloring")
+    parser.add_argument("--time-col", type=str, help="Metadata column used as the time axis for 05_clustering")
     parser.add_argument("--label-mode", type=str, choices=["sampleID_only", "symbol_only", "both"],
                         help="Sample label format for plots")
     parser.add_argument("--symbol-col", type=str, help="Metadata column used as the sample symbol label")
+    parser.add_argument("--normalization-method", type=str,
+                        help="Normalization method for 05_clustering: vst/deseq2/tmm/log2/rlog/cpm")
+    parser.add_argument("--cluster-method", type=str,
+                        help="Clustering method for 05_clustering: hierarchical/kmeans/both")
+    parser.add_argument("--clustering-k", type=int, help="Cluster count for 05_clustering")
+    parser.add_argument("--clustering-dist-method", type=str,
+                        help="Distance metric for 05_clustering: euclidean/pearson/spearman")
+    parser.add_argument("--clustering-top-n", type=int, help="Top variable genes for 05_clustering")
+    parser.add_argument("--top-method", type=str,
+                        help="Gene selection method for 05_clustering: variance/mean/deg")
+    parser.add_argument("--force-rlog", type=str, help="TRUE/FALSE to allow rlog on larger sample sets")
+    parser.add_argument("--rlog-max-samples", type=int, help="Recommended maximum sample count for rlog")
     parser.add_argument("--detect-modules", type=str, help="TRUE/FALSE to run WGCNA module detection")
     parser.add_argument("--trait-cols", type=str, help="Comma-separated metadata columns for module-trait correlation")
     parser.add_argument("--explain-results", type=str, help="TRUE/FALSE to generate interpretation report")
     parser.add_argument("--example", action="store_true",
                         help="Run pipeline with built-in example dataset (no input files needed)")
+    parser.add_argument("--sampledata", action="store_true",
+                        help="Alias of --example for bundled sample-data debugging")
+    parser.add_argument("--debug", action="store_true",
+                        help="Use bundled sample data for debugging and validation")
     args = parser.parse_args()
 
     setup_logging()
@@ -1063,6 +1177,8 @@ def main():
     if args.list_steps:
         for k in sorted(STEP_NAMES.keys()):
             LOG.info("%s: %s", k, STEP_NAMES[k])
+        for k, v in SPECIAL_STEP_NAMES.items():
+            LOG.info("%s: %s", k, v)
         return
     if args.describe:
         for step_id, desc in STEP_DESCRIPTIONS.items():
@@ -1071,10 +1187,20 @@ def main():
             LOG.info("JP: %s", desc["jp"])
         return
 
-    # ---- Example mode ----
-    if args.example:
+    should_use_sampledata = (
+        args.example or args.sampledata or args.debug or
+        (
+            not args.counts and not args.metadata and
+            not load_config(args.config).get("counts_path") and
+            not load_config(args.config).get("metadata_path") and
+            (args.non_interactive or bool(args.run))
+        )
+    )
+
+    # ---- Example / sample-data mode ----
+    if should_use_sampledata:
         LOG.info("============================================================")
-        LOG.info("EXAMPLE MODE: Running pipeline with synthetic dataset")
+        LOG.info("SAMPLE DATA MODE: Running pipeline with bundled dataset")
         LOG.info("============================================================")
         example_dir = BASE_DIR / "example"
         example_counts = example_dir / "counts.rds"
@@ -1101,7 +1227,7 @@ def main():
         # Override args for example mode
         args.counts = str(example_counts)
         args.metadata = str(example_meta)
-        args.organism = args.organism or "human"
+        args.organism = args.organism or "zebrafish"
         args.non_interactive = True
         if not args.run:
             args.run = "1"  # default: run DE only for quick demo
@@ -1166,8 +1292,17 @@ def main():
         "trend_x_col": get_param(cfg, args, "trend_x_col", ""),
         "analysis_mode": get_param(cfg, args, "analysis_mode", "sample"),
         "group_col": get_param(cfg, args, "group_col", ""),
+        "time_col": get_param(cfg, args, "time_col", ""),
+        "top_method": get_param(cfg, args, "top_method", "variance"),
         "label_mode": get_param(cfg, args, "label_mode", "sampleID_only"),
         "symbol_col": get_param(cfg, args, "symbol_col", ""),
+        "normalization_method": get_param(cfg, args, "normalization_method", "vst"),
+        "cluster_method": get_param(cfg, args, "cluster_method", "both"),
+        "clustering_k": get_param(cfg, args, "clustering_k", 6),
+        "clustering_dist_method": get_param(cfg, args, "clustering_dist_method", "euclidean"),
+        "clustering_top_n": get_param(cfg, args, "clustering_top_n", 1000),
+        "force_rlog": parse_bool(get_param(cfg, args, "force_rlog", False), default=False),
+        "rlog_max_samples": get_param(cfg, args, "rlog_max_samples", 30),
         "detect_modules": parse_bool(get_param(cfg, args, "detect_modules", False), default=False),
         "trait_cols": get_param(cfg, args, "trait_cols", ""),
         "explain_results": parse_bool(get_param(cfg, args, "explain_results", False), default=False),
@@ -1194,6 +1329,19 @@ def main():
     if params["analysis_mode"] not in {"sample", "gene_module", "trajectory"}:
         LOG.warning("analysis_mode が不正なため 'sample' に変更します: %s", params["analysis_mode"])
         params["analysis_mode"] = "sample"
+    if params["normalization_method"] not in {"vst", "deseq2", "tmm", "log2", "rlog", "cpm"}:
+        LOG.warning("normalization_method が不正なため 'vst' に変更します: %s", params["normalization_method"])
+        params["normalization_method"] = "vst"
+    if params["cluster_method"] not in {"hierarchical", "kmeans", "both"}:
+        LOG.warning("cluster_method が不正なため 'both' に変更します: %s", params["cluster_method"])
+        params["cluster_method"] = "both"
+    if params["clustering_dist_method"] not in {"euclidean", "pearson", "spearman"}:
+        LOG.warning("clustering_dist_method が不正なため 'euclidean' に変更します: %s",
+                    params["clustering_dist_method"])
+        params["clustering_dist_method"] = "euclidean"
+    if params["top_method"] not in {"variance", "mean", "deg"}:
+        LOG.warning("top_method が不正なため 'variance' に変更します: %s", params["top_method"])
+        params["top_method"] = "variance"
 
     get_organism_args(cfg, args, interactive=not args.non_interactive, config_path=args.config)
     run_selection = args.run if args.run else ("interactive" if not args.non_interactive else "none")
@@ -1204,10 +1352,12 @@ def main():
             run_sel = STEP_ALIASES.get(run_sel, run_sel)
             if run_sel == "all":
                 run_list = list(range(1, 16))
+            elif run_sel == "clustering":
+                run_list = ["clustering"]
             elif run_sel in {1, 6, 7}:
                 run_list = [run_sel]
             else:
-                LOG.error("--run は all / 1 / 6 / 7 のみ対応しています。")
+                LOG.error("--run は all / 1 / 6 / 7 / clustering のみ対応しています。")
                 sys.exit(1)
 
             run_list = filter_openmp_steps(run_list)
@@ -1221,7 +1371,7 @@ def main():
                 6: run_06_enrichment, 7: run_07_gsea, 8: run_08_batch,
                 9: run_09_regression, 10: run_10_qc, 11: run_11_vis,
                 12: run_12_phenotype, 13: run_13_ml, 14: run_14_network,
-                15: run_15_sc,
+                15: run_15_sc, "clustering": run_05_clustering,
             }
 
             write_run_metadata(outdir, args, cfg, ORG_ARGS, params, run_list)
@@ -1246,7 +1396,7 @@ def main():
         "6": run_06_enrichment, "7": run_07_gsea, "8": run_08_batch,
         "9": run_09_regression, "10": run_10_qc, "11": run_11_vis,
         "12": run_12_phenotype, "13": run_13_ml, "14": run_14_network,
-        "15": run_15_sc,
+        "15": run_15_sc, "c": run_05_clustering,
     }
 
     while True:
@@ -1276,11 +1426,12 @@ def main():
             if ch_org == "y":
                 get_organism_args(cfg, args, interactive=True, config_path=args.config)
         elif choice in dispatch:
-            step_num = int(choice)
-            if not OPENMP_AVAILABLE and step_num in OPENMP_STEPS:
-                LOG.warning("OpenMP runtime failure detected (OMP Error #179)")
-                LOG.warning("Skipping steps: 05, 06, 07, 13, 14, 15")
-                continue
+            if choice.isdigit():
+                step_num = int(choice)
+                if not OPENMP_AVAILABLE and step_num in OPENMP_STEPS:
+                    LOG.warning("OpenMP runtime failure detected (OMP Error #179)")
+                    LOG.warning("Skipping steps: 05, 06, 07, 13, 14, 15")
+                    continue
             try:
                 dispatch[choice](common, params, dry_run=args.dry_run)
             except KeyboardInterrupt:

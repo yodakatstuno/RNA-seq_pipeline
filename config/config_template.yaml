@@ -37,6 +37,17 @@ trend_x_col: ''          # Metadata column used on the cluster trend-plot x-axis
 analysis_mode: 'sample'  # sample | gene_module | trajectory
 group_col: ''            # Metadata column for trajectory group coloring (required for trajectory mode)
 
+# --- Time-series Clustering (05_clustering) ---
+normalization_method: 'vst'         # vst | deseq2 | tmm | log2 | rlog | cpm
+cluster_method: 'both'              # hierarchical | kmeans | both
+clustering_k: 6
+clustering_dist_method: 'euclidean' # euclidean | pearson | spearman
+clustering_top_n: 1000
+top_method: 'variance'              # variance | mean | deg
+time_col: ''                        # e.g. dpf; empty = auto-detect
+force_rlog: false                   # Allow rlog for larger sample sets
+rlog_max_samples: 30
+
 # --- Plot Labels (Steps 2/3/4/8/11) ---
 label_mode: 'sampleID_only'  # sampleID_only | symbol_only | both
 symbol_col: ''               # Required when label_mode is symbol_only or both
