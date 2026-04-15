@@ -5,3 +5,4 @@ __pycache__
 .r_libs
 results
 output
+config.yaml

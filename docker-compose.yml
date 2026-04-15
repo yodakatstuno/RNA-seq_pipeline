@@ -1,6 +1,6 @@
 services:
   pipeline:
-    image: ghcr.io/yodakatstuno/rnaseq-pipeline:v1.3.0
+    image: ghcr.io/yodakatstuno/rnaseq-pipeline:v1.3.1
     working_dir: /app
     environment:
       R_LIBS_USER: /app/.r_libs
@@ -13,5 +13,6 @@ services:
       - ./dependencies:/app/dependencies
       - ./data:/data
       - ${HOME}/Output:/app/Output
+      - /dev/null:/app/config.yaml
     tty: true
     stdin_open: true
